@@ -1,0 +1,13 @@
+.idea
+*.iml
+.DS_STORE
+out
+*.pyc
+target
+*.log
+logs
+python-env
+.chalice/venv
+.chalice/deployments
+test.*
+temp.*
