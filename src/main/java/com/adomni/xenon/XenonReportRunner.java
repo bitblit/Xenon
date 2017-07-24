@@ -12,6 +12,7 @@ import net.sf.jasperreports.engine.JasperCompileManager;
 import net.sf.jasperreports.engine.JasperFillManager;
 import net.sf.jasperreports.engine.JasperPrint;
 import net.sf.jasperreports.engine.JasperReport;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +26,7 @@ import javax.mail.internet.InternetAddress;
 import javax.mail.internet.MimeBodyPart;
 import javax.mail.internet.MimeMessage;
 import javax.mail.internet.MimeMultipart;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -97,7 +99,7 @@ public class XenonReportRunner implements Callable<Map<String, RunResult>>{
         return sob.getObjectContent();
       } else {
         LOG.debug("Processing default read: {}", path);
-        String pathToConfig = xenonRoot + "/" + XENON_CONFIG_FILENAME;
+        String pathToConfig = xenonRoot + "/" + path;
         URL url = new URL(pathToConfig);
         return url.openStream();
       }
@@ -126,7 +128,8 @@ public class XenonReportRunner implements Callable<Map<String, RunResult>>{
       params.putAll(global.getGlobalReportParams());
       params.putAll(report.getReportParams());
 
-      JasperReport jr = JasperCompileManager.compileReport(fetchFile(report.getConfigurationResource()));
+      InputStream reportDefStream = fetchFile(report.getConfigurationResource());
+      JasperReport jr = JasperCompileManager.compileReport(reportDefStream);
       JasperPrint jp = JasperFillManager.fillReport(jr, params, conn);
 
       LOG.info("Report created - creating body text");
@@ -136,8 +139,10 @@ public class XenonReportRunner implements Callable<Map<String, RunResult>>{
       Map<Format, File> attachmentFiles = new TreeMap<>();
       for (Format f : report.getAttachmentFormats()) {
         try {
-          File temp = File.createTempFile("XENON_", "." + f);
-          temp.deleteOnExit();
+          //File temp = File.createTempFile("XENON_", "." + f);
+          //temp.deleteOnExit();
+          File temp = new File("XENON."+f);
+
           FileOutputStream fos = new FileOutputStream(temp);
           f.processToStream(jp, fos);
           fos.flush();

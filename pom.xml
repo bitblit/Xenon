@@ -63,6 +63,12 @@
         </dependency>
 
         <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-web</artifactId>
+            <version>${spring.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <scope>test</scope>
@@ -151,10 +157,17 @@
             <version>${javax.mail.api}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <version>${jackson.datatype.jsr310.version}</version>
+        </dependency>
+
 
     </dependencies>
 
     <properties>
+        <jackson.datatype.jsr310.version>2.8.9</jackson.datatype.jsr310.version>
         <javax.mail.api>1.4.3</javax.mail.api>
         <wrench.version>1.2.1+76</wrench.version> <!-- LOCAL-SNAPSHOT -->
         <poi.version>3.10.1</poi.version>

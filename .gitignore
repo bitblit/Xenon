@@ -11,3 +11,5 @@ python-env
 .chalice/deployments
 test.*
 temp.*
+*.PDF
+*.XLS
