@@ -29,6 +29,7 @@ import javax.mail.internet.MimeMultipart;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -36,9 +37,11 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.sql.Connection;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
@@ -59,6 +62,7 @@ public class XenonReportRunner implements Callable<Map<String, RunResult>>{
   private AmazonSimpleEmailService ses;
   private AmazonS3 s3;
   private QuietObjectMapper objectMapper;
+  private List<ReportProcessor> processors = Arrays.asList(new JasperReportProcessor(), new CanvasJSReportProcessor()); // TODO: externalize
 
   public Map<String, RunResult> call()
     throws Exception
@@ -124,95 +128,87 @@ public class XenonReportRunner implements Callable<Map<String, RunResult>>{
     LOG.info("Processing {}",report.getConfigurationResource());
 
     try {
-      Map<String, Object> params = new TreeMap<>();
-      params.putAll(global.getGlobalReportParams());
-      params.putAll(report.getReportParams());
-
-      InputStream reportDefStream = fetchFile(report.getConfigurationResource());
-      JasperReport jr = JasperCompileManager.compileReport(reportDefStream);
-      JasperPrint jp = JasperFillManager.fillReport(jr, params, conn);
-
-      LOG.info("Report created - creating body text");
-      String body = StringUtils.trimToEmpty(report.getBodyText());
-      body += (report.getBodyFormat() == null || !report.getBodyFormat().isUsableAsEmailBody()) ? "" : new String(report.getBodyFormat().processToByteArray(jp));
-
-      Map<Format, File> attachmentFiles = new TreeMap<>();
-      for (Format f : report.getAttachmentFormats()) {
-        try {
-          //File temp = File.createTempFile("XENON_", "." + f);
-          //temp.deleteOnExit();
-          File temp = new File("XENON."+f);
-
-          FileOutputStream fos = new FileOutputStream(temp);
-          f.processToStream(jp, fos);
-          fos.flush();
-          attachmentFiles.put(f, temp);
-          LOG.info("Created {} as {}", f, temp);
-        }
-        catch (Exception e)
-        {
-          LOG.warn("Error processing format {}", f, e);
-          rval = RunResult.PARTIAL_SUCCESS;
-        }
-      }
-
-      LOG.info("All versions created, creating email");
-
-      Session s = Session.getInstance(new Properties(), null);
-      MimeMessage mimeMessage = new MimeMessage(s);
-
-      Set<String> allRecipients = new TreeSet<>();
-      // Sender and recipient
-      mimeMessage.setFrom(new InternetAddress(global.getFromEmail()));
-      for (String list:report.getRecipientLists())
+      Optional<ReportProcessor> opt = processors.stream().filter((p)->p.isProcessorFor(report.getReportType())).findFirst();
+      if (opt.isPresent())
       {
-        List<String> targets =  global.getRecipientLists().get(list);
-        if (targets==null)
+        Map<String, Object> params = new TreeMap<>();
+        params.putAll(global.getGlobalReportParams());
+        params.putAll(report.getReportParams());
+
+        InputStream reportDefStream = fetchFile(report.getConfigurationResource());
+
+        ReportProcessor rp = opt.get();
+        Map<Format,File> results = rp.processReport(params, report, conn, global, reportDefStream);
+
+        LOG.info("Report created - creating body text");
+        String body = StringUtils.trimToEmpty(report.getBodyText());
+        body += (report.getBodyFormat() == null || !report.getBodyFormat().isUsableAsEmailBody()) ? "" : new String(IOUtils.toByteArray(new FileInputStream(results.get(report.getBodyFormat()))));
+
+        LOG.info("All versions created, creating email");
+
+        Session s = Session.getInstance(new Properties(), null);
+        MimeMessage mimeMessage = new MimeMessage(s);
+
+        Set<String> allRecipients = new TreeSet<>();
+        // Sender and recipient
+        mimeMessage.setFrom(new InternetAddress(global.getFromEmail()));
+        for (String list:report.getRecipientLists())
         {
-          LOG.warn("Could not find list {}",list);
+          List<String> targets =  global.getRecipientLists().get(list);
+          if (targets==null)
+          {
+            LOG.warn("Could not find list {}",list);
+          }
+          else
+          {
+            allRecipients.addAll(targets);
+          }
         }
-        else
+
+        for (String toMail:allRecipients)
         {
-          allRecipients.addAll(targets);
+          mimeMessage.addRecipient(javax.mail.Message.RecipientType.TO, new InternetAddress(toMail));
         }
-      }
 
-      for (String toMail:allRecipients)
-      {
-        mimeMessage.addRecipient(javax.mail.Message.RecipientType.TO, new InternetAddress(toMail));
-      }
+        // Subject
+        mimeMessage.setSubject(report.getSubject());
 
-      // Subject
-      mimeMessage.setSubject(report.getSubject());
-
-      // Add a MIME part to the message
-      MimeMultipart mimeBodyPart = new MimeMultipart();
-      BodyPart part = new MimeBodyPart();
-      part.setContent(body,"text/html; charset=UTF-8");
-      mimeBodyPart.addBodyPart(part);
-
-      for (Map.Entry<Format,File> e:attachmentFiles.entrySet())
-      {
-        // Add a attachement to the message
-        part = new MimeBodyPart();
-        DataSource source = new FileDataSource(e.getValue());
-        part.setDataHandler(new DataHandler(source));
-        part.setFileName("REPORT."+e.getKey());
+        // Add a MIME part to the message
+        MimeMultipart mimeBodyPart = new MimeMultipart();
+        BodyPart part = new MimeBodyPart();
+        part.setContent(body,"text/html; charset=UTF-8");
         mimeBodyPart.addBodyPart(part);
+
+        for (Map.Entry<Format,File> e:results.entrySet())
+        {
+          // Add a attachement to the message
+          part = new MimeBodyPart();
+          DataSource source = new FileDataSource(e.getValue());
+          part.setDataHandler(new DataHandler(source));
+          part.setFileName("REPORT."+e.getKey());
+          mimeBodyPart.addBodyPart(part);
+        }
+
+        mimeMessage.setContent(mimeBodyPart);
+
+        // Create Raw message
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        mimeMessage.writeTo(outputStream);
+        RawMessage rawMessage = new RawMessage(ByteBuffer.wrap(outputStream.toByteArray()));
+
+        // Send Mail
+        SendRawEmailRequest rawEmailRequest = new SendRawEmailRequest(rawMessage);
+        rawEmailRequest.setDestinations(allRecipients);
+        rawEmailRequest.setSource(global.getFromEmail());
+        ses.sendRawEmail(rawEmailRequest);
+
+      }
+      else
+      {
+        LOG.warn("Requested a report type that is not available {}", report.getReportType());
+        rval = RunResult.ERROR;
       }
 
-      mimeMessage.setContent(mimeBodyPart);
-
-      // Create Raw message
-      ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-      mimeMessage.writeTo(outputStream);
-      RawMessage rawMessage = new RawMessage(ByteBuffer.wrap(outputStream.toByteArray()));
-
-      // Send Mail
-      SendRawEmailRequest rawEmailRequest = new SendRawEmailRequest(rawMessage);
-      rawEmailRequest.setDestinations(allRecipients);
-      rawEmailRequest.setSource(global.getFromEmail());
-      ses.sendRawEmail(rawEmailRequest);
     }
     catch (Exception e)
     {

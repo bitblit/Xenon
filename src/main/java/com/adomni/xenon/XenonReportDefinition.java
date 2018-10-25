@@ -11,6 +11,7 @@ import java.util.Set;
  */
 @Data
 public class XenonReportDefinition {
+  private ReportType reportType;
   private String configurationResource;
   private Format bodyFormat;
   private Set<Format> attachmentFormats;
